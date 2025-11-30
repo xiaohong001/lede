@@ -13,7 +13,7 @@ on:
       - master
 permissions:
   contents: read
-  actions: write  # 新增：允许写入步骤摘要
+  actions: write
 
 jobs:
   build_openwrt:
@@ -37,11 +37,25 @@ jobs:
                       /usr/local/lib/android /opt/ghc /usr/local/share/boost \
                       /var/cache/apt/archives /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-          # 3. 卸载冗余软件包
+          # 3. 安全卸载已安装的冗余软件包（避免通配符错误）
           sudo apt-mark hold grub-efi-amd64-signed
-          sudo apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* \
-                          dotnet* powershell* openjdk* mysql* php* mongodb* \
-                          snap* mono* libgl1-mesa-dri kubectl minikube helm
+          # 使用dpkg查询已安装包，避免不存在的包导致错误
+          packages_to_remove=$(dpkg -l | awk '/^ii/ {print $2}' | grep -E '^(azure-cli|docker|llvm|firefox|google|powershell|mysql|php|snapd|mono)')
+          if [ -n "$packages_to_remove" ]; then
+            sudo apt -y purge $packages_to_remove
+          fi
+          
+          # 单独处理可能存在的大软件包
+          sudo apt -y purge azure-cli* 2>/dev/null || true
+          sudo apt -y purge docker* 2>/dev/null || true
+          sudo apt -y purge firefox* 2>/dev/null || true
+          sudo apt -y purge google* 2>/dev/null || true
+          sudo apt -y purge powershell* 2>/dev/null || true
+          sudo apt -y purge mysql* 2>/dev/null || true
+          sudo apt -y purge php* 2>/dev/null || true
+          sudo apt -y purge snapd* 2>/dev/null || true
+          sudo apt -y purge mono* 2>/dev/null || true
+          
           sudo apt -y autoremove --purge
           sudo apt clean
 
@@ -68,7 +82,7 @@ jobs:
       - name: 📥 检出OpenWrt源码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1  # 浅克隆，减少磁盘占用
+          fetch-depth: 1
 
       - name: 🧹 二次清理（保险措施）
         uses: jlumbroso/free-disk-space@main
@@ -89,7 +103,7 @@ jobs:
           git remote add -f origin https://github.com/vernesong/OpenClash.git
           git config core.sparsecheckout true
           echo "luci-app-openclash" >> .git/info/sparse-checkout
-          git pull --depth 1 origin master  # 只拉取最新提交，减少体积
+          git pull --depth 1 origin master
           git branch --set-upstream-to=origin/master master
           cd -
 
@@ -173,7 +187,7 @@ jobs:
           CONFIG_CCACHE=y
           CONFIG_CCACHE_DIR=/tmp/ccache
           CONFIG_BUILD_PATENTED=y
-          CONFIG_PACKAGE_kmod-nft-tproxy=y  # Firewall4支持
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
           EOF
 
           # 清理配置文件空格并生成默认配置
@@ -211,24 +225,18 @@ jobs:
 
       - name: 📥 下载依赖包（缓存优化）
         run: |
-          # 创建ccache缓存目录
           mkdir -p /tmp/ccache
-          # 并行下载依赖（16线程，可调整）
           make download -j16
-          # 显示下载后的磁盘占用
           echo "===== 下载依赖后磁盘空间 ====="
           df -h
 
       - name: 🔨 编译固件（空间监控）
         run: |
-          # 编译（失败时单线程输出详细日志）
           make -j$(nproc) || make -j1 V=s
           
-          # 编译完成后清理临时文件
           sudo rm -rf /tmp/ccache
           sudo rm -rf ./build_dir/target-*/tmp/
           
-          # 显示最终磁盘占用
           echo "===== 编译完成后磁盘空间 ====="
           df -h
           echo "=============================="
@@ -238,11 +246,8 @@ jobs:
         run: |
           mkdir -p ./artifact/package
           mkdir -p ./artifact/buildinfo
-          # 清理冗余包目录
           rm -rf $(find ./bin/targets/ -type d -name "packages")
-          # 复制ipk包
           cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
-          # 复制编译信息
           cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
 
       - name: 📤 上传编译信息
@@ -250,7 +255,7 @@ jobs:
         with:
           name: OpenWrt_buildinfo
           path: ./artifact/buildinfo/
-          retention-days: 3  # 产物保留3天，减少空间占用
+          retention-days: 3
 
       - name: 📤 上传IPK包
         uses: actions/upload-artifact@v4
