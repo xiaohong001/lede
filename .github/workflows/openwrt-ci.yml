@@ -22,71 +22,84 @@ jobs:
       TZ: Asia/Shanghai
 
     steps:
-      - name: 🔥 终极磁盘清理（释放15GB+）
+      - name: 🔥 安全磁盘清理（避免系统错误）
         run: |
-          # 1. 删除所有大目录（释放~10GB）
+          # 1. 安全删除大目录（不删除系统关键目录）
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          sudo rm -rf /var/lib/docker /var/lib/apt/lists /var/cache/apt/archives
-          sudo rm -rf /home/runner/.cache /tmp/* /var/tmp/*
+          sudo rm -rf /var/lib/docker /var/lib/apt/lists/* /var/cache/apt/archives/*
+          sudo rm -rf /tmp/* /var/tmp/* /home/runner/.cache/*
           
-          # 2. 删除GitHub Actions日志和缓存（释放~2GB）
-          sudo rm -rf /home/runner/actions-runner/cached/*
+          # 2. 删除GitHub Actions日志和缓存
+          sudo rm -rf /home/runner/actions-runner/cached/_diag/*
           sudo rm -rf /home/runner/actions-runner/_work/_temp/*
-          sudo rm -rf /home/runner/actions-runner/_work/_tool/*
           
-          # 3. 删除系统不必要文件（释放~3GB）
-          sudo rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale
-          sudo rm -rf /usr/lib/jvm /usr/lib/llvm* /usr/lib/ruby /usr/lib/python2*
+          # 3. 卸载不必要的软件包（避免通配符匹配错误）
+          sudo apt-mark hold grub-efi-amd64-signed install-info
+          packages_to_remove=(
+            "azure-cli*" "firefox*" "google-chrome*" "powershell*"
+            "mysql*" "php*" "mongodb*" "snapd*" "mono*" "llvm*"
+            "dotnet*" "openjdk*" "ghc*" "zulu*"
+          )
           
-          # 4. 卸载所有非必要软件
-          sudo apt remove -y --purge $(dpkg -l | grep -E '^(firefox|google|mysql|php|mono|dotnet|snap)' | awk '{print $2}') || true
+          for pkg in "${packages_to_remove[@]}"; do
+            sudo apt remove -y --purge $pkg 2>/dev/null || true
+          done
+          
+          # 4. 安全清理缓存
           sudo apt autoremove -y --purge
           sudo apt clean
           
+          # 5. 修复可能损坏的包
+          sudo apt install -f -y
+          
           # 显示结果
           df -h
-          du -sh /home/runner/*
 
-      - name: 🚀 使用预编译SDK（关键优化）
+      - name: 🚀 使用Docker编译（避免系统依赖问题）
         run: |
-          # 下载预编译的OpenWrt SDK，避免完整编译
-          mkdir -p openwrt-sdk
-          cd openwrt-sdk
-          wget -q https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          tar xJf openwrt-sdk-*.tar.xz --strip-components=1
-          cd -
+          # 使用OpenWrt官方SDK Docker镜像
+          docker pull openwrtorg/sdk:x86-64-openwrt-23.05
           
-          # 设置SDK环境
-          cd openwrt-sdk
-          echo "src-git helloworld https://github.com/fw876/helloworld.git" >> feeds.conf.default
-          ./scripts/feeds update helloworld
-          ./scripts/feeds install luci-app-openclash
-
-      - name: ⚙️ 配置SDK编译
-        run: |
-          cd openwrt-sdk
+          # 创建工作目录
+          mkdir -p openwrt-work && cd openwrt-work
           
-          # 只编译OpenClash和必要依赖
-          echo -e "CONFIG_PACKAGE_luci-app-openclash=y\nCONFIG_PACKAGE_luci-compat=y" > .config
-          make defconfig
-          
-          # 下载依赖
-          make download -j4
-
-      - name: 🔨 编译OpenClash
-        run: |
-          cd openwrt-sdk
-          make package/luci-app-openclash/compile V=s
+          # 在Docker中编译
+          docker run --rm -v $PWD:/work -w /work openwrtorg/sdk:x86-64-openwrt-23.05 \
+            /bin/bash -c " \
+              # 添加feeds
+              echo 'src-git helloworld https://github.com/fw876/helloworld.git' >> feeds.conf.default && \
+              echo 'src-git openclash https://github.com/vernesong/OpenClash.git' >> feeds.conf.default && \
+              
+              # 更新feeds
+              ./scripts/feeds update helloworld openclash base luci && \
+              ./scripts/feeds install -a -p helloworld && \
+              ./scripts/feeds install luci-app-openclash && \
+              
+              # 配置编译
+              echo 'CONFIG_TARGET_x86_64=y' > .config && \
+              echo 'CONFIG_TARGET_x86_64_Generic=y' > .config && \
+              echo 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config && \
+              echo 'CONFIG_PACKAGE_luci-theme-bootstrap=y' >> .config && \
+              echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' >> .config && \
+              
+              # 生成配置
+              make defconfig && \
+              
+              # 下载依赖
+              make download -j4 && \
+              
+              # 编译
+              make -j$(nproc) || make -j1 V=s"
 
       - name: 📦 提取编译产物
         run: |
-          mkdir -p ./artifact
-          cp -rf openwrt-sdk/bin/packages/*/*/*.ipk ./artifact/
-          cp -rf openwrt-sdk/bin/targets/*/*/*.ipk ./artifact/ || true
+          mkdir -p ./artifact/firmware ./artifact/packages
+          cp -rf openwrt-work/bin/targets/*/*/*.{gz,img} ./artifact/firmware/ || true
+          cp -rf openwrt-work/bin/packages/*/*/*.ipk ./artifact/packages/ || true
 
       - name: 📤 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: OpenClash-packages
+          name: OpenWrt-Firmware
           path: ./artifact/
           retention-days: 3
