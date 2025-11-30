@@ -6,14 +6,12 @@
 name: OpenWrt-CI
 
 on:
-  schedule:
-    - cron: 0 20 * * *
   push:
     branches: 
       - master
+  workflow_dispatch:  # 手动触发
 permissions:
   contents: read
-  actions: write
 
 jobs:
   build_openwrt:
@@ -24,141 +22,71 @@ jobs:
       TZ: Asia/Shanghai
 
     steps:
-      - name: 🚨 紧急磁盘清理（最高优先级）
+      - name: 🔥 终极磁盘清理（释放15GB+）
         run: |
-          # 1. 立即删除最大的目录
+          # 1. 删除所有大目录（释放~10GB）
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          sudo rm -rf /var/lib/docker /var/lib/apt/lists/* /var/cache/apt/*
-          sudo rm -rf /tmp/* /var/tmp/* /home/runner/.cache/*
+          sudo rm -rf /var/lib/docker /var/lib/apt/lists /var/cache/apt/archives
+          sudo rm -rf /home/runner/.cache /tmp/* /var/tmp/*
           
-          # 2. 删除GitHub Actions日志缓存
-          sudo rm -rf /home/runner/actions-runner/cached/_diag/*
+          # 2. 删除GitHub Actions日志和缓存（释放~2GB）
+          sudo rm -rf /home/runner/actions-runner/cached/*
           sudo rm -rf /home/runner/actions-runner/_work/_temp/*
+          sudo rm -rf /home/runner/actions-runner/_work/_tool/*
           
-          # 3. 显示当前磁盘使用情况
+          # 3. 删除系统不必要文件（释放~3GB）
+          sudo rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale
+          sudo rm -rf /usr/lib/jvm /usr/lib/llvm* /usr/lib/ruby /usr/lib/python2*
+          
+          # 4. 卸载所有非必要软件
+          sudo apt remove -y --purge $(dpkg -l | grep -E '^(firefox|google|mysql|php|mono|dotnet|snap)' | awk '{print $2}') || true
+          sudo apt autoremove -y --purge
+          sudo apt clean
+          
+          # 显示结果
           df -h
           du -sh /home/runner/*
 
-      - name: 🔧 深度清理系统文件
+      - name: 🚀 使用预编译SDK（关键优化）
         run: |
-          # 1. 停止并删除所有Docker资源
-          sudo systemctl stop docker containerd 2>/dev/null || true
-          sudo docker system prune -af --volumes 2>/dev/null || true
-          sudo rm -rf /var/lib/docker /var/lib/containerd
-          
-          # 2. 卸载所有不必要的软件包
-          sudo apt-mark hold grub-efi-amd64-signed
-          sudo apt remove -y --purge \
-            azure-cli* firefox* google-chrome* powershell* \
-            mysql* php* mongodb* snapd* mono* llvm* \
-            dotnet* openjdk* ghc* zulu* || true
-          
-          # 3. 清理apt缓存和残留
-          sudo apt autoremove -y --purge
-          sudo apt clean
-          sudo apt autoclean
-          
-          # 4. 删除日志文件
-          sudo find /var/log -type f -delete
-          sudo find /var/log -type d -name "journal" -exec rm -rf {} \;
-          
-          # 5. 显示清理结果
-          echo "===== 深度清理后磁盘空间 ====="
-          df -h
-
-      - name: 📥 检出OpenWrt源码（最小化）
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          sparse-checkout: |
-            .
-            !.git
-            !docs
-            !tools
-            !package/feeds
-
-      - name: 🧹 再次清理（编译前最后清理）
-        run: |
-          sudo rm -rf /home/runner/.npm /home/runner/.cache/pip /home/runner/.local
-          sudo rm -rf /usr/share/doc /usr/share/man /usr/share/info
-          df -h
-
-      - name: 📦 精简集成OpenClash
-        run: |
-          # 使用更精简的方式集成OpenClash
-          mkdir -p package/luci-app-openclash
-          cd package/luci-app-openclash
-          git init
-          git remote add origin https://github.com/vernesong/OpenClash.git
-          git config core.sparsecheckout true
-          echo "luci-app-openclash/" > .git/info/sparse-checkout
-          git pull --depth=1 origin master
+          # 下载预编译的OpenWrt SDK，避免完整编译
+          mkdir -p openwrt-sdk
+          cd openwrt-sdk
+          wget -q https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          tar xJf openwrt-sdk-*.tar.xz --strip-components=1
           cd -
           
-          # 只更新必要的feeds
-          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
-          ./scripts/feeds update helloworld base luci
-          ./scripts/feeds install -a -p helloworld
+          # 设置SDK环境
+          cd openwrt-sdk
+          echo "src-git helloworld https://github.com/fw876/helloworld.git" >> feeds.conf.default
+          ./scripts/feeds update helloworld
+          ./scripts/feeds install luci-app-openclash
 
-      - name: ⚙️ 生成最小化配置
+      - name: ⚙️ 配置SDK编译
         run: |
-          rm -f ./.config*
-          touch ./.config
-
-          # 最小化配置，只保留必要组件
-          cat >> .config <<EOF
-          CONFIG_TARGET_x86_64=y
-          CONFIG_TARGET_x86_64_Generic=y
-          CONFIG_TARGET_IMAGES_GZIP=y
+          cd openwrt-sdk
           
-          # 只保留最基础的LuCI和OpenClash
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-base=y
-          CONFIG_PACKAGE_luci-app-openclash=y
-          CONFIG_PACKAGE_luci-theme-bootstrap=y
-          
-          # OpenClash必需依赖
-          CONFIG_PACKAGE_dnsmasq-full=y
-          CONFIG_PACKAGE_ipset=y
-          CONFIG_PACKAGE_iptables-mod-tproxy=y
-          CONFIG_PACKAGE_iptables-mod-extra=y
-          CONFIG_PACKAGE_kmod-tun=y
-          CONFIG_PACKAGE_luci-compat=y
-          
-          # 精简系统
-          CONFIG_TARGET_KERNEL_PARTSIZE=16
-          CONFIG_TARGET_ROOTFS_PARTSIZE=512
-          CONFIG_ALL_NONSHARED=n
-          CONFIG_ALL_KMODS=n
-          CONFIG_ALL=y
-          CONFIG_DEVEL=y
-          CONFIG_CCACHE=y
-          EOF
-
-          sed -i 's/^[ \t]*//g' ./.config
+          # 只编译OpenClash和必要依赖
+          echo -e "CONFIG_PACKAGE_luci-app-openclash=y\nCONFIG_PACKAGE_luci-compat=y" > .config
           make defconfig
-
-          # 精简网络配置
-          echo -e "# network config\nuci set network.lan.ipaddr='192.168.123.111'\nuci commit network" >> package/base-files/files/etc/rc.local
-
-      - name: 📥 下载依赖（限制并行）
-        run: |
-          make download -j4
-          rm -rf ./dl/*.git*
-
-      - name: 🔨 编译固件（单线程减少IO）
-        run: |
-          # 使用单线程编译减少临时文件
-          make -j1 || make -j1 V=s
           
-          # 编译后立即清理
-          rm -rf ./build_dir/target-*/{toolchain,staging_dir}
+          # 下载依赖
+          make download -j4
 
-      - name: 📤 上传固件（只保留必要文件）
+      - name: 🔨 编译OpenClash
+        run: |
+          cd openwrt-sdk
+          make package/luci-app-openclash/compile V=s
+
+      - name: 📦 提取编译产物
+        run: |
+          mkdir -p ./artifact
+          cp -rf openwrt-sdk/bin/packages/*/*/*.ipk ./artifact/
+          cp -rf openwrt-sdk/bin/targets/*/*/*.ipk ./artifact/ || true
+
+      - name: 📤 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_firmware
-          path: |
-            ./bin/targets/*/*/*.gz
-            ./bin/targets/*/*/*.img.gz
-          retention-days: 1
+          name: OpenClash-packages
+          path: ./artifact/
+          retention-days: 3
