@@ -1,10 +1,8 @@
-# 
-# <https://github.com/KFERMercer/OpenWrt-CI>
+# https://github.com/KFERMercer/OpenWrt-CI
 #
 # Copyright (C) 2019 P3TERX
 #
 # Copyright (C) 2020 KFERMercer
-#
 name: OpenWrt-CI
 
 on:
@@ -15,87 +13,136 @@ on:
       - master
 permissions:
   contents: read
+  actions: write  # 新增：允许写入步骤摘要
 
 jobs:
-
   build_openwrt:
-
     name: Build OpenWrt Firmware
-
     runs-on: ubuntu-22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Asia/Shanghai
 
     steps:
-      - name: Space cleanup and Initialization environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: 🔧 初始化环境与深度清理磁盘
         run: |
-          docker rmi `docker images -q`
-          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
-          sudo -E apt-mark hold grub-efi-amd64-signed
-          sudo -E apt update
-          sudo -E apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* dotnet* snap*
-          sudo -E apt -y full-upgrade
-          sudo -E apt -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-          sudo -E systemctl daemon-reload
-          sudo -E apt -y autoremove --purge
-          sudo -E apt clean
-          sudo -E timedatectl set-timezone "Asia/Shanghai"
+          # 1. 强制清理Docker镜像和容器（释放大量空间）
+          sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
+          sudo docker rm $(sudo docker ps -aq) 2>/dev/null || true
+          sudo docker rmi -f $(sudo docker images -aq) 2>/dev/null || true
+          sudo docker system prune -af 2>/dev/null || true
 
-      - name: Checkout OpenWrt
+          # 2. 删除超大目录和无用软件（释放~10GB）
+          sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d \
+                      /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+                      /var/cache/apt/archives /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+          # 3. 卸载冗余软件包
+          sudo apt-mark hold grub-efi-amd64-signed
+          sudo apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* \
+                          dotnet* powershell* openjdk* mysql* php* mongodb* \
+                          snap* mono* libgl1-mesa-dri kubectl minikube helm
+          sudo apt -y autoremove --purge
+          sudo apt clean
+
+          # 4. 更新系统并安装编译依赖
+          sudo apt update
+          sudo apt -y full-upgrade
+          sudo apt -y install ack antlr3 asciidoc autoconf automake autopoint binutils \
+                          bison build-essential bzip2 ccache clang cmake cpio curl \
+                          device-tree-compiler flex gawk gcc-multilib g++-multilib \
+                          gettext genisoimage git gperf haveged help2man intltool \
+                          libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev \
+                          libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev \
+                          libncursesw5-dev libpython3-dev libreadline-dev libssl-dev \
+                          libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch \
+                          pkgconf python3 python3-pyelftools python3-setuptools qemu-utils \
+                          rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+                          upx-ucl unzip vim wget xmlto xxd zlib1g-dev ruby ruby-yaml ipset ip-full
+
+          # 5. 显示清理后的磁盘空间
+          echo "===== 清理后磁盘空间 ====="
+          df -h
+          echo "=========================="
+
+      - name: 📥 检出OpenWrt源码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1  # 浅克隆，减少磁盘占用
 
-      - name: Free Disk Space (Ubuntu)
+      - name: 🧹 二次清理（保险措施）
         uses: jlumbroso/free-disk-space@main
         with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
           tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
           android: true
           dotnet: true
           haskell: true
           large-packages: true
           swap-storage: true
-          
-      - name: Update feeds
+
+      - name: 📦 集成OpenClash并更新 feeds
         run: |
-          # Clone 项目
-          mkdir package/luci-app-openclash
+          # 1. 集成OpenClash（使用稀疏检出，只下载必要文件）
+          mkdir -p package/luci-app-openclash
           cd package/luci-app-openclash
           git init
           git remote add -f origin https://github.com/vernesong/OpenClash.git
           git config core.sparsecheckout true
           echo "luci-app-openclash" >> .git/info/sparse-checkout
-          git pull origin master
+          git pull --depth 1 origin master  # 只拉取最新提交，减少体积
           git branch --set-upstream-to=origin/master master
           cd -
+
+          # 2. 编译po2lmo工具（OpenClash依赖）
+          pushd package/luci-app-openclash/luci-app-openclash/tools/po2lmo
+          make && sudo make install
+          popd
+
+          # 3. 启用helloworld源（提供更多依赖包）
           sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+          
+          # 4. 更新并安装feeds
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Generate configuration file
+      - name: ⚙️ 生成配置文件
         run: |
           rm -f ./.config*
           touch ./.config
 
-          #
-          # 在 cat >> .config <<EOF 到 EOF 之间粘贴你的编译配置, 需注意缩进关系
-          # 例如:
-
+          # 编译配置（优化选型，减少不必要组件）
           cat >> .config <<EOF
           CONFIG_TARGET_x86_64=y
           CONFIG_TARGET_x86_64_Generic=y
           CONFIG_TARGET_IMAGES_GZIP=y
+          
+          # 基础功能包
           CONFIG_PACKAGE_luci-app-autoreboot=y
           CONFIG_PACKAGE_luci-app-firewall=y
           CONFIG_PACKAGE_luci-app-ramfree=y
           CONFIG_PACKAGE_luci-app-ttyd=y
           CONFIG_PACKAGE_luci-theme-bootstrap=y
+          
+          # 核心功能包（OpenClash及依赖）
           CONFIG_PACKAGE_luci-app-openclash=y
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ruby=y
+          CONFIG_PACKAGE_ruby-yaml=y
+          CONFIG_PACKAGE_unzip=y
+          CONFIG_PACKAGE_iptables-mod-tproxy=y
+          CONFIG_PACKAGE_iptables-mod-extra=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          
+          # 可选功能包（按需启用）
           CONFIG_PACKAGE_luci-app-turboacc=y
           CONFIG_PACKAGE_luci-app-mosdns=y
           CONFIG_PACKAGE_luci-app-usb-printer=y
+          
+          # 禁用不需要的组件
           # CONFIG_VMDK_IMAGES is not set
           # CONFIG_PACKAGE_luci-app-zerotier is not set
           # CONFIG_PACKAGE_luci-app-ipsec-server is not set
@@ -117,35 +164,35 @@ jobs:
           # CONFIG_PACKAGE_luci-app-wireguard is not set
           # CONFIG_PACKAGE_luci-app-xlnetacc is not set
           # CONFIG_PACKAGE_luci-app-filetransfer is not set
-          # 基础包
-          # CONFIG_PACKAGE_block-mount is not set
-          # CONFIG_PACKAGE_automount is not set
-
-          # 设置分区大小
+          
+          # 分区大小配置（按需调整）
           CONFIG_TARGET_KERNEL_PARTSIZE=32
           CONFIG_TARGET_ROOTFS_PARTSIZE=760
           
+          # 编译优化（减少体积）
+          CONFIG_CCACHE=y
+          CONFIG_CCACHE_DIR=/tmp/ccache
+          CONFIG_BUILD_PATENTED=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y  # Firewall4支持
           EOF
 
-          #
-          # ===============================================================
-          # 
+          # 清理配置文件空格并生成默认配置
           sed -i 's/^[ \t]*//g' ./.config
           make defconfig
-          
-          # 网络配置信息，将从 zzz-default-settings 文件的第2行开始添加
+
+          # 网络配置（旁路由模式）
           sed -i "2i # network config" ./package/lean/default-settings/files/zzz-default-settings
-          # 默认 IP 地址，旁路由时不会和主路由的 192.168.1.1 冲突
           sed -i "3i uci set network.lan.ipaddr='192.168.123.111'" ./package/lean/default-settings/files/zzz-default-settings
-          sed -i "4i uci set network.lan.proto='static'" ./package/lean/default-settings/files/zzz-default-settings # 静态 IP
-          sed -i "5i uci set network.lan.type='bridge'" ./package/lean/default-settings/files/zzz-default-settings  # 接口类型：桥接
-          sed -i "6i uci set network.lan.ifname='eth0'" ./package/lean/default-settings/files/zzz-default-settings  # 网络端口：默认 eth0，第一个接口
-          sed -i "7i uci set network.lan.netmask='255.255.255.0'" ./package/lean/default-settings/files/zzz-default-settings    # 子网掩码
-          sed -i "8i uci set network.lan.gateway='192.168.123.1'" ./package/lean/default-settings/files/zzz-default-settings  # 默认网关地址（主路由 IP）
-          sed -i "9i uci set network.lan.broadcast='192.168.123.255'" ./package/lean/default-settings/files/zzz-default-settings  # ip v4广播
-          sed -i "10i uci set network.lan.dns='192.168.123.1'" ./package/lean/default-settings/files/zzz-default-settings  # 默认上游 DNS 地址
+          sed -i "4i uci set network.lan.proto='static'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "5i uci set network.lan.type='bridge'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "6i uci set network.lan.ifname='eth0'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "7i uci set network.lan.netmask='255.255.255.0'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "8i uci set network.lan.gateway='192.168.123.1'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "9i uci set network.lan.broadcast='192.168.123.255'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "10i uci set network.lan.dns='192.168.123.1'" ./package/lean/default-settings/files/zzz-default-settings
           sed -i "11i uci commit network\n" ./package/lean/default-settings/files/zzz-default-settings
-          #旁路由设置
+
+          # 旁路由DHCP配置
           sed -i "12i uci set dhcp.lan=dhcp" ./package/lean/default-settings/files/zzz-default-settings
           sed -i "13i uci set dhcp.lan.interface='lan'" ./package/lean/default-settings/files/zzz-default-settings
           sed -i "14i uci set dhcp.lan.ignore='1'" ./package/lean/default-settings/files/zzz-default-settings
@@ -161,45 +208,60 @@ jobs:
           sed -i "24i uci delete dhcp.lan.limit='40'" ./package/lean/default-settings/files/zzz-default-settings
           sed -i "25i uci delete dhcp.lan.force='1'" ./package/lean/default-settings/files/zzz-default-settings
           sed -i "26i uci commit dhcp\n" ./package/lean/default-settings/files/zzz-default-settings
-          
 
-      - name: Download packages
-        run: make download -j16
-
-      - name: Compile firmware
+      - name: 📥 下载依赖包（缓存优化）
         run: |
-          make -j$(nproc) || make -j1 V=s
-          echo "======================="
-          echo "Space usage:"
-          echo "======================="
+          # 创建ccache缓存目录
+          mkdir -p /tmp/ccache
+          # 并行下载依赖（16线程，可调整）
+          make download -j16
+          # 显示下载后的磁盘占用
+          echo "===== 下载依赖后磁盘空间 ====="
           df -h
-          echo "======================="
-          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
-          du -h --max-depth=1 ./build_dir
-          du -h --max-depth=1 ./bin
 
-      - name: Prepare artifact
+      - name: 🔨 编译固件（空间监控）
+        run: |
+          # 编译（失败时单线程输出详细日志）
+          make -j$(nproc) || make -j1 V=s
+          
+          # 编译完成后清理临时文件
+          sudo rm -rf /tmp/ccache
+          sudo rm -rf ./build_dir/target-*/tmp/
+          
+          # 显示最终磁盘占用
+          echo "===== 编译完成后磁盘空间 ====="
+          df -h
+          echo "=============================="
+          du -h --max-depth=1 ./bin/targets/
+
+      - name: 📦 准备产物
         run: |
           mkdir -p ./artifact/package
           mkdir -p ./artifact/buildinfo
+          # 清理冗余包目录
           rm -rf $(find ./bin/targets/ -type d -name "packages")
+          # 复制ipk包
           cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          # 复制编译信息
           cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
 
-      - name: Upload buildinfo
+      - name: 📤 上传编译信息
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_buildinfo
           path: ./artifact/buildinfo/
+          retention-days: 3  # 产物保留3天，减少空间占用
 
-      - name: Upload package
+      - name: 📤 上传IPK包
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_package
           path: ./artifact/package/
+          retention-days: 3
 
-      - name: Upload firmware
+      - name: 📤 上传固件
         uses: actions/upload-artifact@v4
         with:
           name: OpenWrt_firmware
           path: ./bin/targets/
+          retention-days: 3
