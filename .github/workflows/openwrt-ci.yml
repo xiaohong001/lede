@@ -1,105 +1,205 @@
-# https://github.com/KFERMercer/OpenWrt-CI
+# 
+# <https://github.com/KFERMercer/OpenWrt-CI>
 #
 # Copyright (C) 2019 P3TERX
 #
 # Copyright (C) 2020 KFERMercer
+#
 name: OpenWrt-CI
 
 on:
+  schedule:
+    - cron: 0 20 * * *
   push:
     branches: 
       - master
-  workflow_dispatch:  # 手动触发
 permissions:
   contents: read
 
 jobs:
+
   build_openwrt:
+
     name: Build OpenWrt Firmware
+
     runs-on: ubuntu-22.04
-    env:
-      DEBIAN_FRONTEND: noninteractive
-      TZ: Asia/Shanghai
 
     steps:
-      - name: 🔥 安全磁盘清理（避免系统错误）
+      - name: Space cleanup and Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          # 1. 安全删除大目录（不删除系统关键目录）
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          sudo rm -rf /var/lib/docker /var/lib/apt/lists/* /var/cache/apt/archives/*
-          sudo rm -rf /tmp/* /var/tmp/* /home/runner/.cache/*
+          docker rmi `docker images -q`
+          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
+          sudo -E apt-mark hold grub-efi-amd64-signed
+          sudo -E apt update
+          sudo -E apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* dotnet* snap*
+          sudo -E apt -y full-upgrade
+          sudo -E apt -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo -E systemctl daemon-reload
+          sudo -E apt -y autoremove --purge
+          sudo -E apt clean
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
           
-          # 2. 删除GitHub Actions日志和缓存
-          sudo rm -rf /home/runner/actions-runner/cached/_diag/*
-          sudo rm -rf /home/runner/actions-runner/_work/_temp/*
+      - name: Update feeds
+        run: |
+          # Clone 项目
+          mkdir package/luci-app-openclash
+          cd package/luci-app-openclash
+          git init
+          git remote add -f origin https://github.com/vernesong/OpenClash.git
+          git config core.sparsecheckout true
+          echo "luci-app-openclash" >> .git/info/sparse-checkout
+          git pull origin master
+          git branch --set-upstream-to=origin/master master
+          cd -
+          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate configuration file
+        run: |
+          rm -f ./.config*
+          touch ./.config
+
+          #
+          # 在 cat >> .config <<EOF 到 EOF 之间粘贴你的编译配置, 需注意缩进关系
+          # 例如:
+
+          cat >> .config <<EOF
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_Generic=y
+          CONFIG_TARGET_IMAGES_GZIP=y
+          CONFIG_PACKAGE_luci-app-autoreboot=y
+          CONFIG_PACKAGE_luci-app-firewall=y
+          CONFIG_PACKAGE_luci-app-ramfree=y
+          CONFIG_PACKAGE_luci-app-ttyd=y
+          CONFIG_PACKAGE_luci-theme-bootstrap=y
+          CONFIG_PACKAGE_luci-app-openclash=y
+          CONFIG_PACKAGE_luci-app-turboacc=y
+          CONFIG_PACKAGE_luci-app-mosdns=y
+          CONFIG_PACKAGE_luci-app-usb-printer=y
+          # CONFIG_VMDK_IMAGES is not set
+          # CONFIG_PACKAGE_luci-app-zerotier is not set
+          # CONFIG_PACKAGE_luci-app-ipsec-server is not set
+          # CONFIG_PACKAGE_luci-app-adbyby-plus is not set
+          # CONFIG_PACKAGE_luci-app-unblockmusic is not set
+          # CONFIG_PACKAGE_luci-app-accesscontrol is not set
+          # CONFIG_PACKAGE_luci-app-diskman is not set
+          # CONFIG_PACKAGE_luci-app-dockerman is not set
+          # CONFIG_PACKAGE_luci-app-arpbind is not set
+          # CONFIG_PACKAGE_luci-app-ipsec-vpnd is not set
+          # CONFIG_PACKAGE_luci-app-n2n_v2 is not set
+          # CONFIG_PACKAGE_luci-app-nlbwmon is not set
+          # CONFIG_PACKAGE_luci-app-qbittorrent is not set
+          # CONFIG_PACKAGE_luci-app-smartdns is not set
+          # CONFIG_PACKAGE_luci-app-upnp is not set
+          # CONFIG_PACKAGE_luci-app-uugamebooster is not set
+          # CONFIG_PACKAGE_luci-app-vsftpd is not set
+          # CONFIG_PACKAGE_luci-app-webadmin is not set
+          # CONFIG_PACKAGE_luci-app-wireguard is not set
+          # CONFIG_PACKAGE_luci-app-xlnetacc is not set
+          # CONFIG_PACKAGE_luci-app-filetransfer is not set
+          # 基础包
+          # CONFIG_PACKAGE_block-mount is not set
+          # CONFIG_PACKAGE_automount is not set
+
+          # 设置分区大小
+          CONFIG_TARGET_KERNEL_PARTSIZE=32
+          CONFIG_TARGET_ROOTFS_PARTSIZE=760
           
-          # 3. 卸载不必要的软件包（避免通配符匹配错误）
-          sudo apt-mark hold grub-efi-amd64-signed install-info
-          packages_to_remove=(
-            "azure-cli*" "firefox*" "google-chrome*" "powershell*"
-            "mysql*" "php*" "mongodb*" "snapd*" "mono*" "llvm*"
-            "dotnet*" "openjdk*" "ghc*" "zulu*"
-          )
+          EOF
+
+          #
+          # ===============================================================
+          # 
+          sed -i 's/^[ \t]*//g' ./.config
+          make defconfig
           
-          for pkg in "${packages_to_remove[@]}"; do
-            sudo apt remove -y --purge $pkg 2>/dev/null || true
-          done
+          # 网络配置信息，将从 zzz-default-settings 文件的第2行开始添加
+          sed -i "2i # network config" ./package/lean/default-settings/files/zzz-default-settings
+          # 默认 IP 地址，旁路由时不会和主路由的 192.168.1.1 冲突
+          sed -i "3i uci set network.lan.ipaddr='192.168.123.111'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "4i uci set network.lan.proto='static'" ./package/lean/default-settings/files/zzz-default-settings # 静态 IP
+          sed -i "5i uci set network.lan.type='bridge'" ./package/lean/default-settings/files/zzz-default-settings  # 接口类型：桥接
+          sed -i "6i uci set network.lan.ifname='eth0'" ./package/lean/default-settings/files/zzz-default-settings  # 网络端口：默认 eth0，第一个接口
+          sed -i "7i uci set network.lan.netmask='255.255.255.0'" ./package/lean/default-settings/files/zzz-default-settings    # 子网掩码
+          sed -i "8i uci set network.lan.gateway='192.168.123.1'" ./package/lean/default-settings/files/zzz-default-settings  # 默认网关地址（主路由 IP）
+          sed -i "9i uci set network.lan.broadcast='192.168.123.255'" ./package/lean/default-settings/files/zzz-default-settings  # ip v4广播
+          sed -i "10i uci set network.lan.dns='192.168.123.1'" ./package/lean/default-settings/files/zzz-default-settings  # 默认上游 DNS 地址
+          sed -i "11i uci commit network\n" ./package/lean/default-settings/files/zzz-default-settings
+          #旁路由设置
+          sed -i "12i uci set dhcp.lan=dhcp" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "13i uci set dhcp.lan.interface='lan'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "14i uci set dhcp.lan.ignore='1'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "15i uci set dhcp.wan=dhcp" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "16i uci set dhcp.wan.interface='wan'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "17i uci set dhcp.wan.ignore='1'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "18i uci delete dhcp.lan.dhcpv6=disabled" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "19i uci delete dhcp.lan.leasetime='12h'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "20i uci delete dhcp.lan.ra='server'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "21i uci delete dhcp.lan.ra_management='1'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "22i uci delete dhcp.lan.ra_default='1'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "23i uci delete dhcp.lan.start='20'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "24i uci delete dhcp.lan.limit='40'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "25i uci delete dhcp.lan.force='1'" ./package/lean/default-settings/files/zzz-default-settings
+          sed -i "26i uci commit dhcp\n" ./package/lean/default-settings/files/zzz-default-settings
           
-          # 4. 安全清理缓存
-          sudo apt autoremove -y --purge
-          sudo apt clean
-          
-          # 5. 修复可能损坏的包
-          sudo apt install -f -y
-          
-          # 显示结果
+
+      - name: Download packages
+        run: make download -j16
+
+      - name: Compile firmware
+        run: |
+          make -j$(nproc) || make -j1 V=s
+          echo "======================="
+          echo "Space usage:"
+          echo "======================="
           df -h
+          echo "======================="
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          du -h --max-depth=1 ./build_dir
+          du -h --max-depth=1 ./bin
 
-      - name: 🚀 使用Docker编译（避免系统依赖问题）
+      - name: Prepare artifact
         run: |
-          # 使用OpenWrt官方SDK Docker镜像
-          docker pull openwrtorg/sdk:x86-64-openwrt-23.05
-          
-          # 创建工作目录
-          mkdir -p openwrt-work && cd openwrt-work
-          
-          # 在Docker中编译
-          docker run --rm -v $PWD:/work -w /work openwrtorg/sdk:x86-64-openwrt-23.05 \
-            /bin/bash -c " \
-              # 添加feeds
-              echo 'src-git helloworld https://github.com/fw876/helloworld.git' >> feeds.conf.default && \
-              echo 'src-git openclash https://github.com/vernesong/OpenClash.git' >> feeds.conf.default && \
-              
-              # 更新feeds
-              ./scripts/feeds update helloworld openclash base luci && \
-              ./scripts/feeds install -a -p helloworld && \
-              ./scripts/feeds install luci-app-openclash && \
-              
-              # 配置编译
-              echo 'CONFIG_TARGET_x86_64=y' > .config && \
-              echo 'CONFIG_TARGET_x86_64_Generic=y' > .config && \
-              echo 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config && \
-              echo 'CONFIG_PACKAGE_luci-theme-bootstrap=y' >> .config && \
-              echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' >> .config && \
-              
-              # 生成配置
-              make defconfig && \
-              
-              # 下载依赖
-              make download -j4 && \
-              
-              # 编译
-              make -j$(nproc) || make -j1 V=s"
+          mkdir -p ./artifact/package
+          mkdir -p ./artifact/buildinfo
+          rm -rf $(find ./bin/targets/ -type d -name "packages")
+          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
 
-      - name: 📦 提取编译产物
-        run: |
-          mkdir -p ./artifact/firmware ./artifact/packages
-          cp -rf openwrt-work/bin/targets/*/*/*.{gz,img} ./artifact/firmware/ || true
-          cp -rf openwrt-work/bin/packages/*/*/*.ipk ./artifact/packages/ || true
-
-      - name: 📤 上传产物
+      - name: Upload buildinfo
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt-Firmware
-          path: ./artifact/
-          retention-days: 3
+          name: OpenWrt_buildinfo
+          path: ./artifact/buildinfo/
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_package
+          path: ./artifact/package/
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_firmware
+          path: ./bin/targets/
