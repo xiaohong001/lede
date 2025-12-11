@@ -203,8 +203,8 @@ jobs:
       - name: Compile firmware
         run: |
           # 临时挂载 tmpfs 到编译临时目录（需确保Runner内存足够，Ubuntu 22.04 Runner有16GB内存）
-          sudo mount -t tmpfs -o size=6G tmpfs ./tmp/
-          sudo mount -t tmpfs -o size=4G tmpfs ./build_dir/target-x86_64_musl/tmp/
+          # sudo mount -t tmpfs -o size=6G tmpfs ./tmp/
+          # sudo mount -t tmpfs -o size=4G tmpfs ./build_dir/target-x86_64_musl/tmp/
           
           # 降低编译线程数（避免并行生成大量临时文件）
           make -j4 || make -j1 V=s
