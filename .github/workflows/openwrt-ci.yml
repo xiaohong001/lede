@@ -90,6 +90,9 @@ jobs:
           git pull --depth=1 origin master
           cd -
           
+          # 添加第三方源以获取 AdGuardHome, frp 等
+          echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> ./feeds.conf.default
+          
           # 更新 feeds
           sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
           ./scripts/feeds update -a
@@ -122,6 +125,9 @@ jobs:
           CONFIG_PACKAGE_luci-app-turboacc=y
           CONFIG_PACKAGE_luci-app-mosdns=y
           CONFIG_PACKAGE_luci-app-usb-printer=y
+          CONFIG_PACKAGE_luci-app-adguardhome=y
+          CONFIG_PACKAGE_luci-app-frpc=y
+          CONFIG_PACKAGE_luci-app-frps=y
           # 禁用不必要的配置
           CONFIG_VMDK_IMAGES=n
           CONFIG_PACKAGE_luci-app-zerotier=n
