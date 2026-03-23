@@ -285,8 +285,8 @@ jobs:
           # 上传所有关键文件
           files: |
             ./bin/targets/*/*/*
-            ./artifact/package/*
-            ./artifact/buildinfo/*
+            #./artifact/package/*
+            #./artifact/buildinfo/*
           draft: false
           prerelease: false
         env:
