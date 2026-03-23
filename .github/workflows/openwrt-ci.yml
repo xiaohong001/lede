@@ -277,6 +277,7 @@ jobs:
 
       # ========== 发布到 GitHub Release（修复 Tag 问题） ==========
       - name: Upload to GitHub Release
+        if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           # 优先级：手动输入 > 自动生成的时间戳 Tag
