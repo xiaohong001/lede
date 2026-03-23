@@ -13,15 +13,13 @@ on:
   push:
     branches: 
       - master
-  # 可选：添加手动触发，方便自定义版本号
   workflow_dispatch:
     inputs:
       release_tag:
         description: "Release 版本号 (例如: v2024.05.20)"
         required: true
-        default: "auto-build"
+        default: "v2024-latest"
 
-# 【修改点1】权限改为 write，否则无法上传 Release
 permissions:
   contents: write
 
@@ -268,13 +266,22 @@ jobs:
           name: OpenWrt_firmware
           path: ./bin/targets/
 
-      # ========== 【修改点2】新增：发布到 GitHub Release ==========
+      # ========== 生成合法的 Tag 名称（核心修复） ==========
+      - name: Generate valid release tag
+        id: generate_tag
+        run: |
+          # 生成基于时间的 Tag 名称（格式：openwrt-YYYYMMDD-HHMM）
+          TAG_NAME="openwrt-$(date +%Y%m%d-%H%M)"
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "Generated tag: ${TAG_NAME}"
+
+      # ========== 发布到 GitHub Release（修复 Tag 问题） ==========
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # 如果是手动触发，使用输入的版本号；否则使用 Commit SHA
-          tag_name: ${{ github.event.inputs.release_tag || github.sha }}
-          name: OpenWrt Firmware ${{ github.event.inputs.release_tag || github.sha }}
+          # 优先级：手动输入 > 自动生成的时间戳 Tag
+          tag_name: ${{ github.event.inputs.release_tag || steps.generate_tag.outputs.tag_name }}
+          name: OpenWrt Firmware ${{ github.event.inputs.release_tag || steps.generate_tag.outputs.tag_name }}
           # 上传所有关键文件
           files: |
             ./bin/targets/*/*/*
