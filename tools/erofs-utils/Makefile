@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=erofs-utils
 PKG_VERSION:=1.9.1
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL=https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git/snapshot/
@@ -19,8 +19,8 @@ PKG_FIXUP:=autoreconf
 
 include $(INCLUDE_DIR)/host-build.mk
 
-HOST_CONFIGURE_VARS =\
-    LIBS="-llzma -luuid"
+HOST_CONFIGURE_VARS += \
+	LIBS="-llzma -luuid"
 
 HOST_CONFIGURE_ARGS=\
 	--enable-multithreading \
